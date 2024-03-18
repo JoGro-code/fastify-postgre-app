@@ -186,3 +186,73 @@ export const addCustomerWithExternalID = async (
     });
   }
 };
+
+export const updateCustomerWithExternalID = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+) => {
+  const { id }: any = request.query; // ID aus der Query
+  const data: any = request.body;
+  const transaction = await sequelize.transaction();
+
+  try {
+    // Schritt 1: Aktuelle Kundendaten abrufen
+    const [currentCustomer] = await sequelize.query(
+      `SELECT * FROM Customer WHERE ID = :id;`,
+      { replacements: { id }, type: "SELECT", transaction }
+    );
+
+    if (!currentCustomer) {
+      await transaction.rollback();
+      return reply.code(404).send({ message: "Kunde nicht gefunden." });
+    }
+
+    // Schritt 2: Dynamische Erstellung des Update-Statements basierend auf Änderungen
+    const updates = Object.keys(data).reduce((acc: any, key: any) => {
+      if (data[key] !== currentCustomer[key]) {
+        acc.push(`${key} = :${key}`);
+      }
+      return acc;
+    }, []);
+
+    if (updates.length > 0) {
+      await sequelize.query(
+        `UPDATE Customer SET ${updates.join(", ")} WHERE ID = :id RETURNING *;`,
+        {
+          replacements: { ...data, id },
+          type: "UPDATE",
+          transaction,
+        }
+      );
+    }
+    for (const wh of data.WorkingHour) {
+      await sequelize.query(
+        `UPDATE WorkingHour SET IsWorking = :IsWorking, MorningFrom = :MorningFrom, MorningUntil = :MorningUntil, AfterNoonFrom = :AfterNoonFrom, AfterNoonUntil = :AfterNoonUntil WHERE CustomerID = :CustomerID AND DayOfTheWeek = :DayOfTheWeek;`,
+        { replacements: { ...wh, CustomerID: id }, type: "UPDATE", transaction }
+      );
+    }
+
+    // Update-Logik für DynamicColumnsData
+    for (const dcd of data.DynamicColumnsData) {
+      await sequelize.query(
+        `UPDATE DynamicColumnsData SET FieldValue = :FieldValue WHERE CustomerID = :CustomerID AND CustomFieldsExternalID = :CustomFieldsExternalID;`,
+        {
+          replacements: { ...dcd, CustomerID: id },
+          type: "sequelize.QueryTypes.",
+          transaction,
+        }
+      );
+    }
+
+    // Ähnliche Logik für WorkingHour und DynamicColumnsData
+    // Hier muss spezifische Logik implementiert werden, die von den Datenmodellen abhängt
+
+    await transaction.commit();
+    reply.code(200).send({ message: "Kunde erfolgreich aktualisiert." });
+  } catch (error) {
+    await transaction.rollback();
+    reply.code(500).send({
+      error: "Ein Fehler ist aufgetreten beim Aktualisieren des Kunden.",
+    });
+  }
+};

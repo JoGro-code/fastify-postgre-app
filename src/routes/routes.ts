@@ -6,6 +6,7 @@ import {
   deleteUser,
   addCustomerWithExternalID,
   getCustomerById,
+  updateCustomerWithExternalID,
 } from "../controllers/userControllerSql";
 
 export default function (
@@ -18,12 +19,15 @@ export default function (
   fastify.put("/users", updateUser);
   fastify.delete("/users", deleteUser);
 
-  // Neue Kunden-Routen
   fastify.get("/customer/getcustomerslistforfilter", getCustomerById); // Neue GET-Route für Kunden
   fastify.post(
     "/customer/addcustomerwithexternalid",
     addCustomerWithExternalID
-  ); // Neue POST-Route für Kunden
+  );
+  fastify.post(
+    "/customer/updatecustomerwithexternalid",
+    updateCustomerWithExternalID
+  );
 
   done();
 }
