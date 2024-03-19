@@ -1,5 +1,6 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import sequelize from "../config/database";
+import { WorkingHour } from "../types/index";
 
 export const getCustomerById = async (
   request: FastifyRequest,
@@ -111,67 +112,150 @@ export const updateCustomerWithExternalID = async (
   reply: FastifyReply
 ) => {
   const { id }: any = request.query; // ID aus der Query
-  const data: any = request.body;
+  const newData: any = request.body;
   const transaction = await sequelize.transaction();
 
   try {
-    // Schritt 1: Aktuelle Kundendaten abrufen
-    const [currentCustomer] = await sequelize.query(
-      `SELECT * FROM Customer WHERE ID = :id;`,
-      { replacements: { id }, type: "SELECT", transaction }
+    // Schritt 1: Aktuelle Kundendaten zusammen mit assoziierten Daten abrufen
+    const currentCustomerData: any = await sequelize.query(
+      `
+      SELECT c.*, json_agg(distinct w.*) as WorkingHours, json_agg(distinct d.*) as DynamicData
+      FROM Customer c
+      LEFT JOIN WorkingHour w ON w.CustomerID = c.ID
+      LEFT JOIN DynamicColumnsData d ON d.CustomerID = c.ID
+      WHERE c.ID = :id
+      GROUP BY c.ID;
+    `,
+      {
+        replacements: { id },
+        type: "SELECT",
+        transaction,
+      }
     );
 
-    if (!currentCustomer) {
+    if (!currentCustomerData || currentCustomerData.length === 0) {
       await transaction.rollback();
       return reply.code(404).send({ message: "Kunde nicht gefunden." });
     }
 
-    // Schritt 2: Dynamische Erstellung des Update-Statements basierend auf Änderungen
-    const updates = Object.keys(data).reduce((acc: any, key: any) => {
-      if (data[key] !== currentCustomer[key]) {
-        acc.push(`${key} = :${key}`);
+    // Schritt 2: Vergleichen der übergebenen Daten mit den aktuellen Daten und Aktualisieren bei festgestellten Unterschieden
+    let updates: any = [];
+    Object.keys(newData).forEach((key) => {
+      // Ignoriere verschachtelte Objekte wie WorkingHours und DynamicColumnsData hier
+      if (
+        key !== "WorkingHour" &&
+        key !== "DynamicColumnsData" &&
+        newData[key] !== currentCustomerData[key]
+      ) {
+        updates.push(`${key} = :${key}`);
       }
-      return acc;
-    }, []);
-
+    });
+    console.log("Updates:", updates);
     if (updates.length > 0) {
       await sequelize.query(
         `UPDATE Customer SET ${updates.join(", ")} WHERE ID = :id RETURNING *;`,
         {
-          replacements: { ...data, id },
+          replacements: { ...newData, id }, // Verwende newData anstelle von data
           type: "UPDATE",
           transaction,
         }
       );
     }
-    for (const wh of data.WorkingHour) {
-      await sequelize.query(
-        `UPDATE WorkingHour SET IsWorking = :IsWorking, MorningFrom = :MorningFrom, MorningUntil = :MorningUntil, AfterNoonFrom = :AfterNoonFrom, AfterNoonUntil = :AfterNoonUntil WHERE CustomerID = :CustomerID AND DayOfTheWeek = :DayOfTheWeek;`,
-        { replacements: { ...wh, CustomerID: id }, type: "UPDATE", transaction }
-      );
-    }
-
-    // Update-Logik für DynamicColumnsData
-    for (const dcd of data.DynamicColumnsData) {
-      await sequelize.query(
-        `UPDATE DynamicColumnsData SET FieldValue = :FieldValue WHERE CustomerID = :CustomerID AND CustomFieldsExternalID = :CustomFieldsExternalID;`,
+    // Schritt 3: WorkingHour-Daten aktualisieren
+    for (const wh of newData.WorkingHour || []) {
+      const [existingWh] = await sequelize.query(
+        `SELECT * FROM WorkingHour WHERE CustomerID = :CustomerID AND DayOfTheWeek = :DayOfTheWeek;`,
         {
-          replacements: { ...dcd, CustomerID: id },
-          type: "sequelize.QueryTypes.",
+          replacements: { CustomerID: id, DayOfTheWeek: wh.DayOfTheWeek },
+          type: "SELECT",
           transaction,
         }
       );
+      if (existingWh) {
+        // Update, wenn Eintrag existiert
+        await sequelize.query(
+          `UPDATE WorkingHour
+           SET IsWorking = :IsWorking, MorningFrom = :MorningFrom, MorningUntil = :MorningUntil, AfterNoonFrom = :AfterNoonFrom, AfterNoonUntil = :AfterNoonUntil
+           WHERE CustomerID = :CustomerID AND DayOfTheWeek = :DayOfTheWeek;`,
+          {
+            replacements: {
+              ...wh,
+              CustomerID: id,
+            },
+            type: "UPDATE",
+            transaction,
+          }
+        );
+      } else {
+        // Insert, wenn kein Eintrag existiert
+        await sequelize.query(
+          `INSERT INTO WorkingHour (CustomerID, DayOfTheWeek, IsWorking, MorningFrom, MorningUntil, AfterNoonFrom, AfterNoonUntil)
+           VALUES (:CustomerID, :DayOfTheWeek, :IsWorking, :MorningFrom, :MorningUntil, :AfterNoonFrom, :AfterNoonUntil);`,
+          {
+            replacements: {
+              ...wh,
+              CustomerID: id,
+            },
+            type: "INSERT",
+            transaction,
+          }
+        );
+      }
     }
 
-    // Ähnliche Logik für WorkingHour und DynamicColumnsData
-    // Hier muss spezifische Logik implementiert werden, die von den Datenmodellen abhängt
+    /// Schritt 4: DynamicColumnsData aktualisieren
+    for (const dcd of newData.DynamicColumnsData || []) {
+      const [existingDcd] = await sequelize.query(
+        `SELECT * FROM DynamicColumnsData WHERE CustomerID = :CustomerID AND CustomFieldsExternalID = :CustomFieldsExternalID;`,
+        {
+          replacements: {
+            CustomerID: id,
+            CustomFieldsExternalID: dcd.CustomFieldsExternalID,
+          },
+          type: "SELECT",
+          transaction,
+        }
+      );
+
+      if (existingDcd) {
+        // Update, wenn Eintrag existiert
+        await sequelize.query(
+          `UPDATE DynamicColumnsData
+           SET FieldValue = :FieldValue
+           WHERE CustomerID = :CustomerID AND CustomFieldsExternalID = :CustomFieldsExternalID;`,
+          {
+            replacements: {
+              ...dcd,
+              CustomerID: id,
+            },
+            type: "UPDATE",
+            transaction,
+          }
+        );
+      } else {
+        // Insert, wenn kein Eintrag existiert
+        await sequelize.query(
+          `INSERT INTO DynamicColumnsData (CustomerID, CustomFieldsExternalID, FieldValue)
+           VALUES (:CustomerID, :CustomFieldsExternalID, :FieldValue);`,
+          {
+            replacements: {
+              ...dcd,
+              CustomerID: id,
+            },
+            type: "INSERT",
+            transaction,
+          }
+        );
+      }
+    }
 
     await transaction.commit();
     reply.code(200).send({ message: "Kunde erfolgreich aktualisiert." });
   } catch (error) {
+    console.log(error);
     await transaction.rollback();
     reply.code(500).send({
-      error: "Ein Fehler ist aufgetreten beim Aktualisieren des Kunden.",
+      error: error, //"Ein Fehler ist aufgetreten beim Aktualisieren des Kunden."
     });
   }
 };
