@@ -13,7 +13,7 @@ This project is a simple yet powerful implementation of a CRUD (Create, Read, Up
 
 ### Prerequisites
 
-- Node.js (v14 or later recommended)
+- Node.js (v20 or later recommended)
 - PostgreSQL database
 
 ### Installation
