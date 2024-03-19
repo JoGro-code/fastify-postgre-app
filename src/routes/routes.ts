@@ -4,10 +4,12 @@ import {
   getUserById,
   updateUser,
   deleteUser,
+} from "../controllers/userControllerSql";
+import {
   addCustomerWithExternalID,
   getCustomerById,
   updateCustomerWithExternalID,
-} from "../controllers/userControllerSql";
+} from "../controllers/customerContoller";
 
 export default function (
   fastify: FastifyInstance,
