@@ -7,6 +7,7 @@ import {
 } from "../controllers/userControllerSql";
 import {
   addCustomerWithExternalID,
+  deleteCustomerByExternalID,
   getCustomerById,
   updateCustomerWithExternalID,
 } from "../controllers/customerContoller";
@@ -29,6 +30,10 @@ export default function (
   fastify.post(
     "/customer/updatecustomerwithexternalid",
     updateCustomerWithExternalID
+  );
+  fastify.delete(
+    "/customer/deletecustomerbyexternalid",
+    deleteCustomerByExternalID
   );
 
   done();

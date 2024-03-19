@@ -150,7 +150,6 @@ export const updateCustomerWithExternalID = async (
         updates.push(`${key} = :${key}`);
       }
     });
-    console.log("Updates:", updates);
     if (updates.length > 0) {
       await sequelize.query(
         `UPDATE Customer SET ${updates.join(", ")} WHERE ID = :id RETURNING *;`,
@@ -255,7 +254,69 @@ export const updateCustomerWithExternalID = async (
     console.log(error);
     await transaction.rollback();
     reply.code(500).send({
-      error: error, //"Ein Fehler ist aufgetreten beim Aktualisieren des Kunden."
+      error: "Ein Fehler ist aufgetreten beim Aktualisieren des Kunden.",
     });
+  }
+};
+
+export const deleteCustomerByExternalID = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+) => {
+  const { ExternalID }: any = request.query; // ExternalID aus der Query
+  const transaction = await sequelize.transaction();
+  try {
+    //Schritt 1. Suche Kunden
+    const customerQuery = `SELECT * FROM customer WHERE id = :ExternalID;`;
+    const customerRes: any = await sequelize.query(customerQuery, {
+      replacements: { ExternalID },
+      type: "SELECT",
+    });
+
+    if (customerRes.length === 0) {
+      return reply.code(404).send({ message: "Kunde nicht gefunden." });
+    } else {
+      //Schritt 1. Lösche Workinghour
+      await sequelize.query(
+        `DELETE FROM workinghour WHERE customerid = :ExternalID`,
+        {
+          replacements: { ExternalID },
+          type: "DELETE",
+          transaction,
+        }
+      );
+      //Schritt 2. Lösche DynamicColumnsData
+      await sequelize.query(
+        `DELETE FROM dynamiccolumnsdata WHERE customerid = :ExternalID`,
+        {
+          replacements: { ExternalID },
+          type: "DELETE",
+          transaction,
+        }
+      );
+      //Schritt 3. Lösche Customers
+      await sequelize.query(`DELETE FROM customer WHERE id = :ExternalID`, {
+        replacements: { ExternalID },
+        type: "DELETE",
+        transaction,
+      });
+
+      console.log(
+        await sequelize.query(
+          "SELECT * FROM customer WHERE id = :ExternalID;",
+          {
+            replacements: { ExternalID },
+            type: "SELECT",
+            transaction,
+          }
+        )
+      );
+      await transaction.commit();
+      return reply.code(200).send({ message: "Kunde erfolgreich gelöscht." });
+    }
+  } catch (error) {
+    console.error(error);
+    await transaction.rollback();
+    return reply.code(500).send({ message: "Fehler beim Löschen des Kunden." });
   }
 };
